@@ -37,7 +37,7 @@ class MoveBaseSeq():
             n += 1
         #rospy.loginfo(str(self.pose_seq))
         #Create action client
-        self.client = actionlib.SimpleActionClient('move_base',MoveBaseAction)
+        self.client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
         rospy.loginfo("Waiting for move_base action server...")
         #wait = self.client.wait_for_server(rospy.Duration(5.0))
         wait = self.client.wait_for_server()

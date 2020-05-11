@@ -1,18 +1,25 @@
 <launch>
   <arg name="model" default="$(env TURTLEBOT3_MODEL)" doc="model type [burger, waffle]"/>
+  <arg name="amcl" default="true" />
+  <arg name="gmapping" default="false" />
+  <arg name="rviz" default="true" />
+  <arg name="smach" default="true" />
 
   <!-- Turtlebot3 -->
   <include file="$(find turtlebot3_bringup)/launch/turtlebot3_remote.launch" />
 
   <!-- Map server -->
-  <arg name="map_file" default="$(find simple_navigation_goals)/config/map.yaml"/>
+  <arg name="map_file" default="$(find simple_navigation_goals)/config/tb3_house.yaml"/>
   <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)">
   </node>
 
-  <!-- AMCL -->
-  <include file="$(find turtlebot3_navigation)/launch/amcl.launch"/>
+  <!-- Gmapping -->
+  <include if="$(arg gmapping)" file="$(find turtlebot3_navigation)/launch/gmapping.launch" />
 
-  <!-- move_base -->
+  <!-- AMCL -->
+  <include if="$(arg amcl)" file="$(find turtlebot3_navigation)/launch/amcl.launch"/>
+
+  <!-- move_base 
   <arg name="cmd_vel_topic" default="/cmd_vel" />
   <arg name="odom_topic" default="odom" />
   <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
@@ -28,4 +35,22 @@
     <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
     <remap from="odom" to="$(arg odom_topic)"/>
   </node>
+  -->
+
+  <!-- Move Base Flex -->
+  <node pkg="mbf_costmap_nav" type="mbf_costmap_nav" respawn="false" name="move_base_flex" launch-prefix="gdb -ex run --args" output="screen">
+    <param name="tf_timeout" value="1.5"/>
+    <param name="planner_max_retries" value="3"/>
+    <param name="SBPLLatticePlanner/primitive_filename" value="$(find simple_navigation_goals)/mprim/ceres_5cm.mprim"/>
+    <rosparam file="$(find simple_navigation_goals)/config/planners.yaml" command="load" />
+    <rosparam file="$(find simple_navigation_goals)/config/controllers.yaml" command="load" />
+    <rosparam file="$(find simple_navigation_goals)/config/recovery_behaviors.yaml" command="load" />
+    <rosparam file="$(find turtlebot3_navigation)/param/costmap_common_params_$(arg model).yaml" command="load" ns="global_costmap"/>
+    <rosparam file="$(find turtlebot3_navigation)/param/costmap_common_params_$(arg model).yaml" command="load" ns="local_costmap" />
+    <rosparam file="$(find turtlebot3_navigation)/param/global_costmap_params.yaml" command="load" />
+    <rosparam file="$(find turtlebot3_navigation)/param/local_costmap_params.yaml" command="load" />
+  </node>
+  <!-- Default naive SMACH Navigation State Machine
+  <node if="$(arg smach)" pkg="simple_navigation_goals" type="mbf_state_machine.py" name="navigation_sm" output="screen"/>
+  -->
 </launch>

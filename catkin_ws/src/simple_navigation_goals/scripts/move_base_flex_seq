@@ -1,0 +1,322 @@
+#!/usr/bin/env python
+__author__ = 'Lingzhe Zhao'
+
+import numpy as np
+
+import rospy
+import smach
+import smach_ros
+
+from Queue import Queue, LifoQueue
+from operator import itemgetter
+
+from std_msgs.msg import Int32, String
+from geometry_msgs.msg import Pose, Point, Quaternion, PoseStamped, PoseArray
+from nav_msgs.msg import Path
+from tf.transformations import quaternion_from_euler
+
+from actionlib.simple_action_client import SimpleActionClient, GoalStatus
+from mbf_msgs.msg import ExePathAction
+from mbf_msgs.msg import GetPathAction
+from mbf_msgs.msg import RecoveryAction
+
+from mbf_future_planning import MBFFuturePlanning
+
+
+def publish_current_goals(pose_seq):
+    # Convert to PoseArray
+    pose_arr = PoseArray()
+    pose_arr.header.frame_id = "map"
+    for pose in pose_seq:
+        pose_arr.poses.append(pose)
+    pub = rospy.Publisher('/user_interface/goals', PoseArray, queue_size=1)
+    pub.publish(pose_arr)
+
+
+class PlannerSucceeded(smach.State):
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['continue', 'succeeded'],
+                             input_keys=['pose_seq', 'path_seq', 'length_seq', 'closest_index'])
+
+    def execute(self, userdata):
+        rospy.loginfo('Remaining goals: ' + str(len(userdata.pose_seq)))
+        del userdata.length_seq[userdata.closest_index]
+        del userdata.path_seq[userdata.closest_index]
+        del userdata.pose_seq[userdata.closest_index]
+        # update rviz display
+        publish_current_goals(userdata.pose_seq)
+        # Continue to iterate
+        if len(userdata.pose_seq) > 0:
+            return 'continue'
+        else:
+            return 'succeeded'
+
+
+class PublishGoal(smach.State):
+    def __init__(self):
+        smach.State.__init__(self, outcomes=['published'],
+                             input_keys=['pose_seq', 'path_seq',
+                                         'length_seq', 'closest_index'],
+                             output_keys=['goal', 'closest_index'])
+
+    def execute(self, userdata):
+        userdata.closest_index = userdata.length_seq.index(
+            min(userdata.length_seq))
+        p = PoseStamped()
+        p.header.frame_id = "map"
+        p.header.stamp = rospy.Time.now()
+        p.pose = userdata.pose_seq[userdata.closest_index]
+        #pub = rospy.Publisher('/move_base_flex/goal', PoseStamped, queue_size=1)
+        # rospy.sleep(5)
+        # pub.publish(p)
+        rospy.loginfo('Executing plan ' + str(userdata.closest_index))
+        userdata.goal = p
+        return 'published'
+
+
+class MoveBaseFlexSeq():
+
+    def __init__(self):
+        rospy.init_node('mbf_state_machine')
+
+        # Read goals from launch file
+        points_seq = rospy.get_param('mbf_seq/p_seq')
+        # Only yaw angle required (no ratotions around x and y axes) in deg:
+        yaweulerangles_seq = rospy.get_param('mbf_seq/yea_seq')
+        # List of goal quaternions:
+        quat_seq = list()
+        # List of goal poses:
+        pose_seq = list()
+
+        for yawangle in yaweulerangles_seq:
+            # Unpacking the quaternion tuple and passing it as arguments to Quaternion message constructor
+            quat_seq.append(Quaternion(
+                *(quaternion_from_euler(0, 0, yawangle*np.pi/180, axes='sxyz'))))
+
+        # Returns a list of lists [[point1], [point2],...[pointn]]
+        n = 3
+        points = [points_seq[i:i+n] for i in range(0, len(points_seq), n)]
+        rospy.loginfo(str(points))
+        for point in points:
+            # Exploit n variable to cycle in quat_seq
+            pose_seq.append(Pose(Point(*point), quat_seq[n-3]))
+            n += 1
+        rospy.loginfo(str(pose_seq))
+        publish_current_goals(pose_seq)
+
+        # Create SMACH state machine
+        sm = smach.StateMachine(
+            outcomes=['succeeded', 'continue', 'aborted', 'preempted'])
+
+        # Define userdata
+        sm.userdata.pose_seq = pose_seq
+        # List of planning path:
+        sm.userdata.path_seq = [None] * len(pose_seq)
+        # List of planning path length:
+        sm.userdata.length_seq = [1e10] * len(pose_seq)
+        # current goal
+        sm.userdata.target_pose = None
+        # current path
+        sm.userdata.path = None
+        # misc
+        sm.userdata.error = None
+        sm.userdata.clear_costmap_flag = False
+        sm.userdata.error_status = None
+
+        sm.userdata.goal_num = 0
+
+        with sm:
+            rospy.loginfo('Waiting for /user_interface/goal_num...')
+
+            def goal_num_monitor_cb(userdata, msg):
+                userdata.goal_num = msg.data
+                rospy.loginfo('Waiting for ' +
+                              str(userdata.goal_num) + ' goal inputs')
+                return False
+
+            # Monitor topic to get MeshGoal from RViz plugin
+            smach.StateMachine.add(
+                'WAIT_FOR_GOAL_NUM',
+                smach_ros.MonitorState(
+                    '/user_interface/goal_num',
+                    Int32,
+                    goal_num_monitor_cb,
+                    input_keys=['goal_num'],
+                    output_keys=['goal_num']),
+                transitions={
+                    'valid': 'WAIT_FOR_GOAL_NUM',
+                    'invalid': 'GET_GOAL_INPUT',
+                    'preempted': 'preempted'})
+
+            goal_num_iter = smach.Iterator(outcomes=['succeeded', 'preempted', 'aborted'],
+                                           input_keys=[
+                                               'goal_num', 'pose_seq', 'length_seq', 'path_seq'],
+                                           output_keys=[
+                                               'pose_seq', 'length_seq', 'path_seq'],
+                                           it=lambda: range(
+                                               0, sm.userdata.goal_num),
+                                           it_label='index1',
+                                           exhausted_outcome='succeeded')
+            with goal_num_iter:
+                container_sm = smach.StateMachine(outcomes=['succeeded', 'preempted', 'aborted', 'continue'],
+                                                  input_keys=[
+                                                      'goal_num', 'index1', 'pose_seq', 'length_seq', 'path_seq'],
+                                                  output_keys=['pose_seq', 'length_seq', 'path_seq'])
+                with container_sm:
+                    # Goal callback for state WAIT_FOR_GOAL
+                    def goal_monitor_cb(userdata, msg):
+                        rospy.loginfo(
+                            'Waiting for ' + str(userdata.goal_num - userdata.index1) + ' goal inputs')
+                        userdata.pose_seq.append(msg.pose)
+                        userdata.length_seq.append(1e10)
+                        userdata.path_seq.append(None)
+                        # update rviz
+                        publish_current_goals(userdata.pose_seq)
+
+                    # Monitor topic to get MeshGoal from RViz plugin
+                    smach.StateMachine.add(
+                        'WAIT_FOR_GOAL',
+                        smach_ros.MonitorState(
+                            '/move_base_simple/goal',
+                            PoseStamped,
+                            goal_monitor_cb,
+                            input_keys=['goal_num', 'index1',
+                                        'pose_seq', 'length_seq', 'path_seq'],
+                            output_keys=['pose_seq', 'length_seq', 'path_seq']
+                        ),
+                        transitions={
+                            'valid': 'WAIT_FOR_GOAL',
+                            'invalid': 'continue',
+                            'preempted': 'preempted'
+                        }
+                    )
+                    # close container_sm
+                goal_num_iter.set_contained_state('ITER_CONTAINER',
+                                                  container_sm,
+                                                  loop_outcomes=['continue'])
+            # close the tutorial_it
+            smach.StateMachine.add('GET_GOAL_INPUT', goal_num_iter,
+                                   {'succeeded': 'GET_PATH',
+                                    'aborted': 'WAIT_FOR_GOAL_NUM'})
+
+            # http://wiki.ros.org/smach/Tutorials/Iterator%20container
+            poses_iter = smach.Iterator(outcomes=['succeeded', 'preempted', 'aborted'],
+                                        input_keys=[
+                                            'pose_seq', 'length_seq', 'path_seq', 'target_pose'],
+                                        output_keys=['length_seq', 'path_seq'],
+                                        it=lambda: range(
+                                            0, len(sm.userdata.pose_seq)),
+                                        it_label='index2',
+                                        exhausted_outcome='succeeded')
+            with poses_iter:
+                container_sm = smach.StateMachine(outcomes=['succeeded', 'preempted', 'aborted', 'continue'],
+                                                  input_keys=[
+                                                      'pose_seq', 'length_seq', 'path_seq', 'index2', 'target_pose'],
+                                                  output_keys=['length_seq', 'path_seq'])
+                with container_sm:
+                    # extract pose from sequence by index and feed into GET_PATH State
+                    @smach.cb_interface(
+                        input_keys=['target_pose', 'pose_seq', 'index2'])
+                    def get_path_goal_cb(userdata, goal):
+                        p = PoseStamped()
+                        p.header.frame_id = "map"
+                        p.header.stamp = rospy.Time.now()
+                        print(userdata.index2)
+                        p.pose = sm.userdata.pose_seq[userdata.index2]
+                        goal.target_pose = p
+
+                    # save path and length to sequence
+                    @smach.cb_interface(
+                        input_keys=['pose_seq', 'length_seq',
+                                    'path_seq', 'index2'],
+                        outcomes=['succeeded', 'aborted'],
+                        output_keys=['length_seq', 'path_seq']
+                    )
+                    def eval_result_path_length_cb(userdata, status, result):
+                        if status == GoalStatus.SUCCEEDED:
+                            _path_result = result.path.poses
+                            # Eval path length of current goal
+                            _path_length = 0
+                            for i in range(len(_path_result) - 1):
+                                _position_a_x = _path_result[i].pose.position.x
+                                _position_b_x = _path_result[i +
+                                                             1].pose.position.x
+                                _position_a_y = _path_result[i].pose.position.y
+                                _position_b_y = _path_result[i +
+                                                             1].pose.position.y
+                                _path_length += np.sqrt(np.power((_position_b_x - _position_a_x), 2) + np.power(
+                                    (_position_b_y - _position_a_y), 2))
+                            rospy.loginfo('goal index:' + str(userdata.index2))
+                            rospy.loginfo('path length: ' + str(_path_length))
+                            userdata.length_seq[userdata.index2] = _path_length
+                            userdata.path_seq[userdata.index2] = result.path
+                            return 'succeeded'
+                        else:
+                            rospy.loginfo(
+                                'plan for index ' + str(userdata.index2) + ' is unfeasible')
+                            del userdata.length_seq[userdata.index2]
+                            del userdata.path_seq[userdata.index2]
+                            del userdata.pose_seq[userdata.index2]
+                            # update rviz
+                            publish_current_goals(userdata.pose_seq)
+                            return 'aborted'
+
+                    # Get path
+                    smach.StateMachine.add(
+                        'GET_PATH',
+                        smach_ros.SimpleActionState(
+                            '/move_base_flex/get_path',
+                            GetPathAction,
+                            goal_cb=get_path_goal_cb,
+                            result_cb=eval_result_path_length_cb,
+                            goal_slots=['target_pose'],
+                            result_slots=['path'],
+                        ),
+                        transitions={
+                            'succeeded': 'continue',
+                            'aborted': 'continue',
+                            'preempted': 'preempted'
+                        }
+                    )
+                # close container_sm
+                poses_iter.set_contained_state('ITER_CONTAINER',
+                                               container_sm,
+                                               loop_outcomes=['continue'])
+            # close the tutorial_it
+            smach.StateMachine.add('GET_PATH', poses_iter,
+                                   {'succeeded': 'PUB_GOAL',
+                                    'aborted': 'aborted'})
+
+            smach.StateMachine.add('PUB_GOAL', PublishGoal(),
+                                   transitions={'published': 'FUTURE_PLANNER'})
+
+            recovery_behaviors = [entry['name'] for entry in rospy.get_param(
+                '/move_base_flex/recovery_behaviors')]
+            MBFFuturePlanning.set_recovery_behaviors(recovery_behaviors)
+            smach.StateMachine.add('FUTURE_PLANNER', MBFFuturePlanning(),
+                                   transitions={'aborted': 'aborted',
+                                                'preempted': 'preempted',
+                                                'succeeded': 'POST_EXE'},
+                                   remapping={'target_pose': 'goal'})
+
+            smach.StateMachine.add('POST_EXE', PlannerSucceeded(),
+                                   transitions={'continue': 'GET_PATH',
+                                                'succeeded': 'WAIT_FOR_GOAL_NUM'})
+
+        # Create and start introspection server
+        sis = smach_ros.IntrospectionServer('smach_server', sm, '/SM_ROOT')
+        sis.start()
+
+        # Execute SMACH plan
+        sm.execute()
+
+        # Wait for interrupt and stop introspection server
+        rospy.spin()
+        sis.stop()
+
+
+if __name__ == '__main__':
+    try:
+        MoveBaseFlexSeq()
+    except rospy.ROSInterruptException:
+        rospy.loginfo("Navigation finished.")

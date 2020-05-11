@@ -1,0 +1,13 @@
+<launch>
+
+<!-- MoveBaseSeq node launch and Points Sequence ROS Parameters Loading -->
+
+    <!--Run move_base_seqs node-->
+        <node pkg="simple_navigation_goals" type="mbf_future_planning.py" name="mbf_future_planning" output="screen">
+                
+            <param name="recovery_behavior_enabled" value="true"/>
+            <param name="clearing_rotation_allowed" value="false"/>
+
+        </node>
+
+</launch>
