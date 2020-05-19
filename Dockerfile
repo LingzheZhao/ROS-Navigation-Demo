@@ -1,5 +1,9 @@
 FROM docker.lzzhao.app:4567/lzzhao/robond-docker/master
 
+# Add NVIDIA GPU support
+ENV NVIDIA_VISIBLE_DEVICES all
+ENV NVIDIA_DRIVER_CAPABILITIES compute,video,utility
+
 # Set up the workspace
 RUN /bin/bash -c "echo 'export HOME=/home/ubuntu' >> /root/.bashrc && source /root/.bashrc" && \
     mkdir -p ~/ros_ws/src && \
