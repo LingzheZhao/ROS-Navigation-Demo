@@ -60,13 +60,13 @@
   <exec_depend>rospy</exec_depend>
 
   <exec_depend>smach_ros</exec_depend>
-  <exec_depend>smach_utils</exec_depend>
 
-  <exec_depend>ceres_bringup</exec_depend>
-  <exec_depend>ceres_description</exec_depend>
+  <exec_depend>turtlebot3_navigation</exec_depend>
+  <exec_depend>turtlebot3_gazebo</exec_depend>
 
-  <exec_depend>move_base_flex</exec_depend>
   <exec_depend>move_base</exec_depend>
+  <exec_depend>move_base_flex</exec_depend>
+  <exec_depend>mbf_costmap_core</exec_depend>
 
   <exec_depend>sbpl_lattice_planner</exec_depend>
   <exec_depend>global_planner</exec_depend>
