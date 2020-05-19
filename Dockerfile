@@ -6,8 +6,6 @@ RUN /bin/bash -c "echo 'export HOME=/home/ubuntu' >> /root/.bashrc && source /ro
     cd $HOME && git clone --recursive https://gitlab.lzzhao.app/lzzhao/ros-web-navigation-simulation && \
     /bin/bash -c "source /opt/ros/melodic/setup.bash && \
                   cd ~/ros-web-navigation-simulation/catkin_ws/ && \
+                  rosdep install --from-paths . --ignore-src -r -y && \
                   catkin_make && \
                   echo 'source ~/ros-web-navigation-simulation/catkin_ws/devel/setup.bash' >> ~/.bashrc"
-
-# Install Depedencies
-RUN rosdep install --from-paths ~/ros-web-navigation-simulation/catkin_ws --ignore-src -r -y
