@@ -4,7 +4,7 @@ FROM docker.lzzhao.app:4567/lzzhao/robond-docker/master
 ENV NVIDIA_VISIBLE_DEVICES all
 ENV NVIDIA_DRIVER_CAPABILITIES compute,video,utility
 
-RUN apt-get update && apt-get upgrade -y && apt-get install -y nvidia-driver-440
+RUN apt-get update && apt-get upgrade -y
 
 # Set up the workspace
 RUN /bin/bash -c "echo 'export HOME=/home/ubuntu' >> /root/.bashrc && source /root/.bashrc" && \
