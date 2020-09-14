@@ -41,6 +41,8 @@
   <node pkg="mbf_costmap_nav" type="mbf_costmap_nav" respawn="false" name="move_base_flex" launch-prefix="gdb -ex run --args" output="screen">
     <param name="tf_timeout" value="1.5"/>
     <param name="planner_max_retries" value="3"/>
+    <param name="recovery_behavior_enabled" value="true"/>
+    <param name="clearing_rotation_allowed" value="false"/>
     <param name="SBPLLatticePlanner/primitive_filename" value="$(find simple_navigation_goals)/mprim/ceres_5cm.mprim"/>
     <rosparam file="$(find simple_navigation_goals)/config/planners.yaml" command="load" />
     <rosparam file="$(find simple_navigation_goals)/config/controllers.yaml" command="load" />
